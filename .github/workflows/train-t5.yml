@@ -1,0 +1,80 @@
+name: Train T5 on Azure ML
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: HF model id
+        required: false
+        default: google/flan-t5-small
+      seq_len:
+        description: Max seq length
+        required: false
+        default: "160"
+
+permissions:
+  id-token: write    # OIDC
+  contents: read
+
+jobs:
+  submit-train:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure ML CLI
+        run: az extension add -n ml -y
+
+      # Optional: print current subscription & workspace
+      - name: Show context
+        run: |
+          az account show -o table
+          echo "RG=${{ secrets.AZ_RESOURCE_GROUP }}  WS=${{ secrets.AZ_ML_WORKSPACE }}"
+
+      # Submit AML job using your job.yml (points to compute: training-t5)
+      - name: Submit job
+        id: submit
+        run: |
+          # If you want to override a couple of params via inputs, simple sed works:
+          sed -i "s#--model-name .*#--model-name ${{ github.event.inputs.model }}#g" job.yml || true
+          sed -i "s#--max-input-length .*#--max-input-length ${{ github.event.inputs.seq_len }}#g" job.yml || true
+          sed -i "s#--max-target-length .*#--max-target-length ${{ github.event.inputs.seq_len }}#g" job.yml || true
+
+          JOB_NAME=$(az ml job create \
+            -g "${{ secrets.AZ_RESOURCE_GROUP }}" \
+            -w "${{ secrets.AZ_ML_WORKSPACE }}" \
+            --file job.yml --query name -o tsv)
+          echo "JOB_NAME=$JOB_NAME" >> $GITHUB_OUTPUT
+          echo "Submitted: $JOB_NAME"
+
+      - name: Stream logs (wait for completion)
+        run: |
+          az ml job stream \
+            -g "${{ secrets.AZ_RESOURCE_GROUP }}" \
+            -w "${{ secrets.AZ_ML_WORKSPACE }}" \
+            --name "${{ steps.submit.outputs.JOB_NAME }}"
+          STATUS=$(az ml job show -g "${{ secrets.AZ_RESOURCE_GROUP }}" -w "${{ secrets.AZ_ML_WORKSPACE }}" -n "${{ steps.submit.outputs.JOB_NAME }}" --query status -o tsv)
+          echo "Final status: $STATUS"
+          test "$STATUS" = "Completed"
+
+      - name: Download AML outputs
+        run: |
+          mkdir -p aml_runs
+          az ml job download \
+            -g "${{ secrets.AZ_RESOURCE_GROUP }}" \
+            -w "${{ secrets.AZ_ML_WORKSPACE }}" \
+            -n "${{ steps.submit.outputs.JOB_NAME }}" \
+            --all --download-path "aml_runs/${{ steps.submit.outputs.JOB_NAME }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aml-outputs
+          path: aml_runs/${{ steps.submit.outputs.JOB_NAME }}

@@ -1,0 +1,27 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+code: .
+command: >-
+  python fine_tune_t5_punct.py
+  --model-name google/flan-t5-small
+  --train-data data/train.jsonl
+  --eval-data data/eval.jsonl
+  --output-dir outputs/flan_t5_small_lora
+  --batch-size 2
+  --eval-batch-size 2
+  --learning-rate 3e-4
+  --epochs 1
+  --save-steps 500
+  --eval-steps 500
+  --max-input-length 160
+  --max-target-length 160
+  --gradient-accumulation-steps 8
+environment:
+  conda_file: env.yml
+  image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest
+compute: azureml:training-t5
+experiment_name: t5-punct
+display_name: t5-punct-cpu
+resources:
+  instance_count: 1
+limits:
+  timeout: 7200
